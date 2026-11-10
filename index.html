@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="Analyzing Inference Schedules of Flow Matching">
+  <meta name="keywords" content="Flow Matching">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analyzing Inference Schedules of Flow Matching</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <link rel="icon" href="./static/images/favicon.svg">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+  
+  <!-- MathJax Configuration with AMS automatic numbering & \bm support -->
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true,
+        tags: 'ams',
+        macros: {
+          bm: ["\\boldsymbol{#1}", 1]
+        }
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+  
+  <!-- Custom Bibliography Engine -->
+  <script src="./static/js/bibliography.js"></script>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-1 publication-title">Analyzing Inference Schedules of Flow Matching</h1>
+
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">
+              <span>Jingren Xie</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="hero teaser">
+  <div class="container is-max-desktop">
+    <div class="hero-body">
+      <img src="./static/images/gaussian_hierarchy_flow_t0_to_1.gif" alt="Teaser Framework" style="width: 100%; height: auto; border-radius: 10px;">
+      <h2 class="subtitle has-text-centered">
+        <span class="dnerf">Visualization of unconditional vector fields, CFG vector fields, and guided ODE sampling trajectories.</span>
+      </h2>
+    </div>
+  </div>
+</section>
+
+<!-- MAIN CONTENT BLOCK -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column is-full-width">
+        <div class="content has-text-justified">
+            <h2 class="title is-3" id="sec_1" style="margin-top: 30px;">Introduction</h2>
+Flow matching <cite data-ref="lipman2023flow"></cite><cite data-ref="liu2023flow"></cite> constructs continuous probability paths between a simple prior distribution and an empirical data distribution. 
+A neural network is trained to regress the target vector field across stochastically sampled time points from a Probability Density Function (PDF), $t \sim p(t)$.
+During inference, the trained neural network is employed to generate samples by computing the integral in discrete steps $N$ using Euler or Heun solvers.
+            <p>Recent state-of-the-art methods <cite data-ref="esser2024sd3"></cite><cite data-ref="labs2025flux"></cite><cite data-ref="zhang2026rit"></cite> apply a non-uniform logit-normal distribution for training and an empirical time-shifting schedule for inference. 
+This time-shifting strategy is empirically effective for image generation in a few steps.
+However, the continuous training time PDF $p(t)$ and the discrete inference schedule $\{t_k\}_{k=0}^N$ have largely been treated as decoupled hyperparameters. 
+In this report, we bridge this theoretical gap by coupling the inference integration schedule to the training time distribution.</p>
+            <h2 class="title is-3" id="sec_2" style="margin-top: 30px;">Preliminary</h2>
+Flow matching <cite data-ref="lipman2023flow"></cite><cite data-ref="liu2023flow"></cite> learns a vector field that transports a simple prior distribution (e.g., Gaussian distribution, $\mathbf{x}_{0} \sim p_0 = \mathcal{N}(\mathbf{0}, \mathbf{I}_d)$) to an empirical data distribution $\mathbf{x}_{1} \sim p_{\text{data}}$ along the interpolation path $\mathbf{x}_{t} = (1 - t)\mathbf{x}_{0} + t\mathbf{x}_{1}$ for time $t \in [0, 1]$.
+This induces the probability flow Ordinary Differential Equation (ODE) $\frac{d \mathbf{x}_{t}}{d t} = \mathbf{v}_\theta(\mathbf{x}_{t})$.
+The parameters $\theta$ are optimized by minimizing the objective $\mathcal{L}(\theta) = \mathbb{E}_{\mathbf{x}_{0}, \mathbf{x}_{1}, t \sim p(t)} \left[ \left\| \mathbf{v}_\theta(\mathbf{x}_{t}) - \big(\mathbf{x}_{1} - \mathbf{x}_{0}\big) \right\|_2^2 \right]$.
+During inference, we generate a sample by computing the numerical integral
+            <div class="equation-container" id="eq:generative_integral" style="margin: 15px 0;">
+\begin{equation}
+\hat{\mathbf{x}}_{1} = \mathbf{x}_{0} + \int_{0}^{1} \mathbf{v}_\theta(\mathbf{x}_{t}) \, dt. \tag{1}
+\end{equation}
+</div>
+            <p>To align numerical integration with $p(t)$, we introduce a uniform computational clock $u \in [0, 1]$ and map it to time $t$ via a strictly monotonic function $t = f(u)$ defined by the Cumulative Distribution Function (CDF) $F(t)$</p>
+            <div class="equation-container" id="eq:cdf_mapping" style="margin: 15px 0;">
+\begin{equation}
+u = F(t) = \int_{0}^{t} p(\tau) \, d\tau \iff t = f(u) = F^{-1}(u). \tag{2}
+\end{equation}
+</div>
+            <p>Table <a href="#tab:time_shift_comparison">1</a> and Figure <a href="#fig:density_and_schedule">1</a> summarize training time $p(t)$. 
+During training, time points are sampled via $t \sim p(t)$; during inference, a uniform grid $u_k = \frac{k}{N}$ is mapped to time steps $t_k = f(u_k)$ with step size $\Delta t_k = t_{k+1} - t_k = f(u_{k+1}) - f(u_k)$.</p>
+            <div class="table-container" id="tab:time_shift_comparison" style="margin: 20px 0;">
+  <p class="has-text-centered"><b>Table 1:</b> <i>The training time probability density function $p(t)$, inverse-density scaling $t_{\text{inv}}(u) = f(u)$, and empirical time-shifting $t_{\text{shift}}(u)$.</i></p>
+  <table class="table is-bordered is-striped is-narrow is-hoverable" style="margin: auto;">
+                <tr><th><strong>Distribution</strong></th><th>$p(t)$</th><th>$t_{\text{inv}}(u) = f(u)$</th><th>$t_{\text{shift}}(u)$</th></tr>
+                <tr><td><strong>Uniform</strong> <cite data-ref="lipman2023flow"></cite><cite data-ref="liu2023flow"></cite></td><td>$1$</td><td>$u$</td><td>$u$</td></tr>
+                <tr><td><strong>Logit-Normal</strong> <cite data-ref="esser2024sd3"></cite><cite data-ref="labs2025flux"></cite></td><td>$\frac{1}{\sigma t(1-t)} \phi\left(\frac{\text{logit}(t) - \mu}{\sigma}\right)$</td><td>$\text{sigmoid}\Big(\sigma \Phi^{-1}(u) + \mu \Big)$</td><td>$\text{sigmoid}\Big(\sigma \text{logit}(u) + \mu \Big)$</td></tr>
+                <tr><td><strong>Dimension-Aware</strong> <cite data-ref="zhang2026rit"></cite></td><td>$\frac{1}{\sigma t(1-t)} \phi\left(\frac{\text{logit}(t) + \log s}{\sigma}\right)$</td><td>$\text{sigmoid}\Big(\sigma \Phi^{-1}(u) - \log s\Big)$</td><td>$\text{sigmoid}\Big(\sigma \text{logit}(u) - \log s\Big)$</td></tr>
+  </table>
+</div>
+            <div class="figure-container" id="fig:density_and_schedule" style="margin: 25px 0; text-align: center;">
+  <img src="./static/images/density_and_schedule.svg" alt="density_and_schedule.svg" style="width: 100%; max-width: 100%; height: auto; display: block; margin: 0 auto;">
+  <p class="has-text-centered" style="margin-top: 10px;"><b>Figure 1:</b> <i><strong>Training time $p(t)$ and inference schedule $t = f(u)$.</strong> 
+    <strong>Left:</strong> Comparison between the uniform density and the dimension-aware logit-normal density ($s = 4.9, \sigma = 1$). 
+    <strong>Right:</strong> Comparison of the uniform schedule ($t = u$), the inverse-desnsity scaling schedule $t_{\mathrm{inv}}(u) = \operatorname{sigmoid}(\sigma_{\mathrm{inv}} \Phi^{-1}(u) + \mu_{\mathrm{inv}})$, and the empirical time-shifting schedule $t_{\mathrm{shift}}(u) = \operatorname{sigmoid}(\sigma_{\mathrm{shift}} \operatorname{logit}(u) + \mu_{\mathrm{shift}})$ across $\sigma_{\mathrm{inv}} \in \{1, 2, 3\}$ and $\sigma_{\mathrm{shift}} \in \{1, 2, 3\}$ with fixed $\mu_{\mathrm{inv}} = \mu_{\mathrm{shift}} = -\log 4.9$.</i></p>
+</div>
+            <p><strong>Inverse-Density Scaling vs. Empirical Time-Shifting.</strong> 
+Exact CDF inversion of the logit-normal distribution (Table <a href="#tab:time_shift_comparison">1</a>) maps $u \in (0, 1)$ through $\Phi^{-1}(u)$</p>
+            <div class="equation-container" id="eq:probit_shift" style="margin: 15px 0;">
+\begin{equation}
+t_{\text{inv}}(u) = \text{sigmoid}\Big(\sigma_{\text{inv}} \Phi^{-1}(u) + \mu_{\text{inv}}\Big). \tag{3}
+\end{equation}
+</div>
+            <p>State-of-the-art flow matching models <cite data-ref="esser2024sd3"></cite><cite data-ref="labs2025flux"></cite><cite data-ref="zhang2026rit"></cite> warp $u \in (0, 1)$ using $\text{logit}(u) = \log\frac{u}{1-u}$</p>
+            <div class="equation-container" id="eq:empirical_shift" style="margin: 15px 0;">
+\begin{equation}
+t_{\text{shift}}(u) = \text{sigmoid}\Big(\sigma_{\text{shift}} \text{logit}(u) + \mu_{\text{shift}}\Big). \tag{4}
+\end{equation}
+</div>
+            <p><strong>Classifier-Free Guidance.</strong> 
+During inference with CFG <cite data-ref="ho2022classifier"></cite>, the velocity field $\mathbf{v}_w(\mathbf{x}_{t})$ extrapolates between the conditional prediction $\mathbf{v}_c(\mathbf{x}_{t}) = \mathbf{v}_\theta(\mathbf{x}_{t} \mid \mathbf{c})$ and the unconditional prediction $\mathbf{v}_\emptyset(\mathbf{x}_{t}) = \mathbf{v}_\theta(\mathbf{x}_{t} \mid \emptyset)$ with guidance scale $w \ge 1$</p>
+            <div class="equation-container" id="eq:cfg_field" style="margin: 15px 0;">
+\begin{equation}
+\mathbf{v}_w(\mathbf{x}_{t}) = \mathbf{v}_c(\mathbf{x}_{t}) + (w - 1)\big(\mathbf{v}_c(\mathbf{x}_{t}) - \mathbf{v}_\emptyset(\mathbf{x}_{t})\big). \tag{5}
+\end{equation}
+</div>
+            <p>Eq. <a href="#eq:generative_integral">1</a> can be rewritten as</p>
+            <div class="equation-container" id="eq:cfg_integral" style="margin: 15px 0;">
+\begin{equation}
+\hat{\mathbf{x}}_1 = \mathbf{x}_{0} + \int_{0}^{1} \mathbf{v}_w(\mathbf{x}_{t}) \, dt. \tag{6}
+\end{equation}
+</div>
+            <p>We introduce a guidance strain indicator ($\mathcal{I}_{w}$) to investigate how CFG works.
+$\mathcal{I}_{w}(t_k)$ quantifies the magnitude of the repulsive extrapolation vector injected at step $t_k$</p>
+            <div class="equation-container" id="eq:strain_indicator" style="margin: 15px 0;">
+\begin{equation}
+\mathcal{I}_{w}(t_k) = \left\| \mathbf{v}_c(\hat{\mathbf{x}}_k) - \mathbf{v}_\emptyset(\hat{\mathbf{x}}_k) \right\|_2. \tag{7}
+\end{equation}
+</div>
+            <h2 class="title is-3" id="sec_3" style="margin-top: 30px;">Analytical Examples</h2>
+<h3 class="title is-4" id="subsec_3.1" style="margin-top: 20px;">Unimodal Gaussian Models</h3>
+            <p>We consider transporting a standard isotropic Gaussian prior 
+$p_0(\mathbf{x}) = \mathcal{N}(\mathbf{x}; \mathbf{0}, \mathbf{I}_d)$ 
+into an isotropic Gaussian target distribution 
+$p_1(\mathbf{x}) = p_{\mathrm{data}}(\mathbf{x}) = \mathcal{N}(\mathbf{x}; \boldsymbol{\mu}, \sigma^2\mathbf{I}_d)$, 
+where $\boldsymbol{\mu} \in \mathbb{R}^d$ and $\sigma > 0$. 
+$\mathbf{x}_t$ follows the distribution
+$p_t(\mathbf{x}) = \mathcal{N}(\mathbf{x}; \boldsymbol{\mu}_t, \sigma_t^2\mathbf{I}_d)$, 
+where $\boldsymbol{\mu}_t = t\boldsymbol{\mu}$ and $\sigma_t^2 = (1-t)^2 + t^2\sigma^2$, whose time derivatives satisfy $\dot{\boldsymbol{\mu}}_t = \boldsymbol{\mu}$ and $ \sigma_t\dot{\sigma}_t = t(1+\sigma^2) - 1$.
+Differentiating $\mathbf{x}_t$ with respect to $t$ and substituting $\mathbf{x}_0 = \frac{\mathbf{x}_t - t\mathbf{x}_1}{1-t}$ yields
+$\mathbf{v}(\mathbf{x}_t \mid \mathbf{x}_1) = \frac{d \mathbf{x}_t}{dt} = \mathbf{x}_1 - \mathbf{x}_0 = \frac{\mathbf{x}_1 - \mathbf{x}_t}{1 - t}$.
+The corresponding marginal velocity field is obtained by</p>
+            <div class="equation-container" id="eq:marginal_velocity_def" style="margin: 15px 0;">
+\begin{equation}
+\mathbf{v}(\mathbf{x}_t) 
+    = \mathbb{E}_{\mathbf{x}_1 \sim p(\mathbf{x}_1 \mid \mathbf{x}_t)}\big[\mathbf{v}(\mathbf{x}_t \mid \mathbf{x}_1)\big] 
+    = \frac{\mathbb{E}[\mathbf{x}_1 \mid \mathbf{x}_t] - \mathbf{x}_t}{1 - t}. \tag{8}
+\end{equation}
+</div>
+            <p>Since $\mathbf{x}_1$ and $\mathbf{x}_t$ are jointly Gaussian with $\operatorname{Cov}(\mathbf{x}_1, \mathbf{x}_t) = t\sigma^2\mathbf{I}_d$ and $\operatorname{Cov}(\mathbf{x}_t) = \sigma_t^2\mathbf{I}_d$, applying the Gaussian conditioning formula to $\mathbb{E}[\mathbf{x}_1 \mid \mathbf{x}_t]$ gives</p>
+            <div class="equation-container" id="eq:posterior_mean_x1" style="margin: 15px 0;">
+\begin{align}
+\mathbb{E}[\mathbf{x}_1 \mid \mathbf{x}_t]
+    = \mathbb{E}[\mathbf{x}_1] 
+      + \operatorname{Cov}(\mathbf{x}_1, \mathbf{x}_t)\operatorname{Cov}(\mathbf{x}_t)^{-1}\big(\mathbf{x}_t - \mathbb{E}[\mathbf{x}_t]\big)= \boldsymbol{\mu} + \frac{t\sigma^2}{\sigma_t^2}(\mathbf{x}_t - t\boldsymbol{\mu}). \tag{9}
+\end{align}
+</div>
+            <p>Substituting $\mathbb{E}[\mathbf{x}_1 \mid \mathbf{x}_t]$ into Eq. <a href="#eq:marginal_velocity_def">8</a> gives</p>
+            <div class="equation-container" id="eq:single_gaussian_velocity" style="margin: 15px 0;">
+\begin{align}
+\mathbf{v}(\mathbf{x}_t) = \frac{\boldsymbol{\mu} + \frac{t\sigma^2}{\sigma_t^2}(\mathbf{x}_t - t\boldsymbol{\mu}) - \mathbf{x}_t}{1 - t} = \dot{\boldsymbol{\mu}}_t + \frac{\dot{\sigma}_t}{\sigma_t}(\mathbf{x}_t - \boldsymbol{\mu}_t). \tag{10}
+\end{align}
+</div>
+            <p>Given $\dot{\mathbf{x}}_t = \mathbf{v}(\mathbf{x}_t)$, we obtain $\frac{d}{dt}(\mathbf{x}_t - \boldsymbol{\mu}_t) = \frac{\dot{\sigma}_t}{\sigma_t}(\mathbf{x}_t - \boldsymbol{\mu}_t)$.
+Applying the quotient rule yields</p>
+            <div class="equation-container" style="margin: 15px 0;">
+\begin{equation}
+\frac{d}{dt}\left(\frac{\mathbf{x}_t - \boldsymbol{\mu}_t}{\sigma_t}\right) 
+    = \frac{\dot{\mathbf{x}}_t - \dot{\boldsymbol{\mu}}_t}{\sigma_t} - \frac{\dot{\sigma}_t}{\sigma_t^2}(\mathbf{x}_t - \boldsymbol{\mu}_t) 
+    = \mathbf{0}. \tag{11}
+\end{equation}
+</div>
+            <p>Integrating from $0$ to $t$ and using $\boldsymbol{\mu}_0 = \mathbf{0}$ and $\sigma_0 = 1$ gives $\frac{\mathbf{x}_t - \boldsymbol{\mu}_t}{\sigma_t} = \frac{\mathbf{x}_0 - \boldsymbol{\mu}_0}{\sigma_0} = \mathbf{x}_0$ and</p>
+            <div class="equation-container" id="eq:single_gaussian_trajectory" style="margin: 15px 0;">
+\begin{equation}
+\mathbf{x}_t = \boldsymbol{\mu}_t + \sigma_t\mathbf{x}_0. \tag{12}
+\end{equation}
+</div>
+            <p>Differentiating $\mathbf{x}_t$ with respect to $t$ yields</p>
+            <div class="equation-container" id="eq:single_gaussian_traj_vel" style="margin: 15px 0;">
+\begin{equation}
+\dot{\mathbf{x}}_t 
+    = \boldsymbol{\mu} + \dot{\sigma}_t\mathbf{x}_0. \tag{13}
+\end{equation}
+</div>
+            <p>Integrating $\dot{\mathbf{x}}_t$ over $t \in [0, 1]$ confirms that Eq. <a href="#eq:generative_integral">1</a> recovers the target distribution without bias</p>
+            <div class="equation-container" style="margin: 15px 0;">
+\begin{equation}
+\hat{\mathbf{x}}_1 
+    = \mathbf{x}_0 + \int_0^1 \dot{\mathbf{x}}_t \, dt 
+    = \mathbf{x}_0 + \boldsymbol{\mu} + (\sigma - 1)\mathbf{x}_0 
+    = \boldsymbol{\mu} + \sigma\mathbf{x}_0 \sim \mathcal{N}(\boldsymbol{\mu}, \sigma^2\mathbf{I}_d). \tag{14}
+\end{equation}
+</div>
+            <p>Differentiating Eq. <a href="#eq:single_gaussian_traj_vel">13</a> gives $\ddot{\mathbf{x}}_t = \ddot{\sigma}_t\mathbf{x}_0$. 
+Applying the quotient rule to $\dot{\sigma}_t = \frac{t(1+\sigma^2)-1}{\sigma_t}$ and substituting $\sigma_t^2 = (1-t)^2 + t^2\sigma^2$ yields</p>
+            <div class="equation-container" id="eq:single_gaussian_accel" style="margin: 15px 0;">
+\begin{align}
+\ddot{\mathbf{x}}_t 
+    &= \frac{d}{dt}\left(\frac{t(1+\sigma^2)-1}{\sigma_t}\right)\mathbf{x}_0 \nonumber \tag{15}\\&= \frac{(1+\sigma^2)\sigma_t - \big(t(1+\sigma^2)-1\big)\dot{\sigma}_t}{\sigma_t^2}\,\mathbf{x}_0 \nonumber\\&= \frac{(1+\sigma^2)\sigma_t^2 - \big(t(1+\sigma^2)-1\big)^2}{\sigma_t^3}\,\mathbf{x}_0 \nonumber\\&= \frac{\sigma^2}{\sigma_t^3}\,\mathbf{x}_0. \tag{16}
+\end{align}
+</div>
+            <p>Although individual conditional paths $\mathbf{x}_t = (1 - t)\mathbf{x}_0 + t\mathbf{x}_1$ are straight lines, the deterministic probability flow ODE trajectories $\mathbf{x}_t$ in Eq. <a href="#eq:single_gaussian_trajectory">12</a> have zero acceleration ($\ddot{\mathbf{x}}_t = \mathbf{0}$) if and only if $\mathbf{x}_0 = \mathbf{0}$ (the mean ray), or asymptotically on $[0, 1)$ in the limit $\sigma \to 0$
+<ul style="margin: 10px 0 15px 25px;">
+  <li><strong>Minimum-Variance Bottleneck.</strong>
+    When $\dot{\sigma}_t = 0$, $\sigma_t$ reaches its global minimum</p>
+            <div class="equation-container" id="eq:t_star_bottleneck" style="margin: 15px 0;">
+\begin{equation}
+t^* = \frac{1}{1+\sigma^2}, \sigma_{\min} = \sigma_{t^*} = \frac{\sigma}{\sqrt{1+\sigma^2}}. \tag{17}
+\end{equation}
+</div></li>
+  <li><strong>Peak Trajectory Acceleration.</strong>
+    When $t = t^*$, $\|\ddot{\mathbf{x}}_t\|_2$ reaches its maximum
+            <div class="equation-container" style="margin: 15px 0;">
+\begin{equation}
+\max_{t \in [0, 1]} \|\ddot{\mathbf{x}}_t\|_2 = \|\ddot{\mathbf{x}}_{t^*}\|_2 = \frac{\sigma^2}{\sigma_{\min}^3}\|\mathbf{x}_0\|_2 = \frac{(1+\sigma^2)^{3/2}}{\sigma}\|\mathbf{x}_0\|_2. \tag{18}
+\end{equation}
+</div></li>
+</ul>
+            <div class="figure-container" id="fig:unimodal_gaussian_flow_sigmas" style="margin: 25px 0; text-align: center;">
+  <img src="./static/images/unimodal_gaussian_flow_sigmas.svg" alt="unimodal_gaussian_flow_sigmas.svg" style="max-width: 100%; height: auto; display: block; margin: 0 auto;">
+  <p class="has-text-centered" style="margin-top: 10px;"><b>Figure 2:</b> <i>The unimodal Gaussian flow dynamics: trajectory $x_t = t\mu + \sigma_t x_0$ (left), velocity $v_t = \mu + \dot{\sigma}_t x_0$ (middle), and acceleration $a_t = (\sigma^2 / \sigma_t^3) x_0$ (right) for initial state $x_0 = 0.1$. 
+    <strong>Top row:</strong> $\mu = -0.102$ with $\sigma \in \{0.25, 0.452, 0.5, 0.75, 1\}$. 
+    <strong>Bottom row:</strong> $\mu = 0.449$ with $\sigma \in \{0.226, 0.25, 0.5, 0.75, 1\}$.</i></p>
+</div>
+            <h3 class="title is-4" id="subsec_3.2" style="margin-top: 20px;">Bimodal Gaussian Mixture Models</h3>
+We examine a simple bimodal Gaussian mixture model $p_{\text{data}}(\mathbf{x}) = \frac{1}{2} \mathcal{N}\big(\mathbf{x}; \boldsymbol{\mu}, \sigma^2 \mathbf{I}_d\big) + \frac{1}{2} \mathcal{N}\big(\mathbf{x}; -\boldsymbol{\mu}, \sigma^2 \mathbf{I}_d\big)$.
+The marginal distribution at time $t \in [0, 1]$ is given by $p_t(\mathbf{x}) = \frac{1}{2} \mathcal{N}\big(\mathbf{x}; t\boldsymbol{\mu}, \sigma_{t}^2 \mathbf{I}_d\big) + \frac{1}{2} \mathcal{N}\big(\mathbf{x}; -t\boldsymbol{\mu}, \sigma_{t}^2 \mathbf{I}_d\big)$, where $\sigma_{t}^2 = (1-t)^2 + t^2\sigma^2$.
+By Bayes' rule, the posterior probabiltiy $\gamma_1(\mathbf{x}_t) = \mathrm{P}(m=1 \mid \mathbf{x}_t)$ is
+            <div class="equation-container" id="eq:two_gmm_probability" style="margin: 15px 0;">
+\begin{equation}
+\gamma_1(\mathbf{x}_t) 
+    = \frac{\mathcal{N}(\mathbf{x}_t; t\boldsymbol{\mu}, \sigma_t^2\mathbf{I}_d)}{\mathcal{N}(\mathbf{x}_t; t\boldsymbol{\mu}, \sigma_t^2\mathbf{I}_d) + \mathcal{N}(\mathbf{x}_t; -t\boldsymbol{\mu}, \sigma_t^2\mathbf{I}_d)} = \text{sigmoid}\!\left(\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right). \tag{19}
+\end{equation}
+</div>
+            <p>By symmetry, the competing mode probability is $\gamma_2(\mathbf{x}_t) = \mathrm{P}(m=2 \mid \mathbf{x}_t) = 1 - \gamma_1(\mathbf{x}_t) = \text{sigmoid}\!\big(-\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\big)$.
+Their difference between $\gamma_1(\mathbf{x}_t)$ and $\gamma_2(\mathbf{x}_t)$ is</p>
+            <div class="equation-container" id="eq:two_gmm_gamma_diff" style="margin: 15px 0;">
+\begin{equation}
+\gamma_1(\mathbf{x}_t) - \gamma_2(\mathbf{x}_t) 
+    = \text{sigmoid}\!\left(\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right) - \text{sigmoid}\!\big(-\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\big)
+    = \tanh\!\left(\frac{t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right). \tag{20}
+\end{equation}
+</div>
+            <p>From the unimodal results, the exact class-conditional trajectories and velocities for modes $m = 1$ ($+\boldsymbol{\mu}$) and $m = 2$ ($-\boldsymbol{\mu}$) starting from $\mathbf{x}_0 \in \mathbb{R}^d$ are</p>
+            <div class="equation-container" style="margin: 15px 0;">
+\begin{align}
+\mathbf{x}_{1,t} = t\boldsymbol{\mu} + \sigma_t\mathbf{x}_0,
+    \mathbf{x}_{2,t} = -t\boldsymbol{\mu} + \sigma_t\mathbf{x}_0. \tag{21}
+\end{align}
+</div>
+            <p>The two class-conditional velocity fields at an arbitrary state $\mathbf{x}_t$ are</p>
+            <div class="equation-container" id="eq:v1_v2_simplified" style="margin: 15px 0;">
+\begin{align}
+\mathbf{v}_1(\mathbf{x}_t) = \boldsymbol{\mu} + \frac{\dot{\sigma}_t}{\sigma_t}(\mathbf{x}_t - t\boldsymbol{\mu}),
+    \mathbf{v}_2(\mathbf{x}_t) = -\boldsymbol{\mu} + \frac{\dot{\sigma}_t}{\sigma_t}(\mathbf{x}_t + t\boldsymbol{\mu}). \tag{22}
+\end{align}
+</div>
+            <p>The sum and difference of the two class-conditional velocities take the forms</p>
+            <div class="equation-container" id="eq:two_gmm_v_diff" style="margin: 15px 0;">
+\begin{equation}
+\mathbf{v}_1(\mathbf{x}_t) + \mathbf{v}_2(\mathbf{x}_t) = 2\frac{\dot{\sigma}_t}{\sigma_t}\mathbf{x}_t, 
+    \mathbf{v}_1(\mathbf{x}_t) - \mathbf{v}_2(\mathbf{x}_t) = 2\left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\boldsymbol{\mu}. \tag{23}
+\end{equation}
+</div>
+            <p>Decomposing $\mathbf{v}_\emptyset(\mathbf{x}_t) = \gamma_1(\mathbf{x}_t)\mathbf{v}_1(\mathbf{x}_t) + \gamma_2(\mathbf{x}_t)\mathbf{v}_2(\mathbf{x}_t)$ into symmetric and antisymmetric parts and substituting Eqs. <a href="#eq:two_gmm_gamma_diff">20</a> and  <a href="#eq:two_gmm_v_diff">23</a> yields</p>
+            <div class="equation-container" id="eq:two_gmm_uncond_tanh" style="margin: 15px 0;">
+\begin{equation}
+\begin{aligned}
+    \mathbf{v}_\emptyset(\mathbf{x}_t) 
+    &= \frac{\gamma_1(\mathbf{x}_t) + \gamma_2(\mathbf{x}_t)}{2}\big(\mathbf{v}_1(\mathbf{x}_t) + \mathbf{v}_2(\mathbf{x}_t)\big) + \frac{\gamma_1(\mathbf{x}_t) - \gamma_2(\mathbf{x}_t)}{2}\big(\mathbf{v}_1(\mathbf{x}_t) - \mathbf{v}_2(\mathbf{x}_t)\big) \\
+    &= \frac{\dot{\sigma}_t}{\sigma_t}\mathbf{x}_t + \left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\tanh\!\left(\frac{t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right)\boldsymbol{\mu}.
+    \end{aligned} \tag{24}
+\end{equation}
+</div>
+            <p>When conditioning on mode $m \in \{1, 2\}$ with guidance weight $w \ge 1$, the CFG velocity field is $\mathbf{v}_{w,m}(\mathbf{x}_t) = \mathbf{v}_m(\mathbf{x}_t) + (w - 1)\big(\mathbf{v}_m(\mathbf{x}_t) - \mathbf{v}_\emptyset(\mathbf{x}_t)\big)$. 
+Using $\gamma_1(\mathbf{x}_t) + \gamma_2(\mathbf{x}_t) = 1$, the velocity discrepancy $\mathbf{v}_m(\mathbf{x}_t) - \mathbf{v}_\emptyset(\mathbf{x}_t)$ is given by</p>
+            <div class="equation-container" id="eq:cfg_discrepancy_m1" style="margin: 15px 0;"><span id="eq:cfg_discrepancy_m2"></span>
+\begin{align}
+\mathbf{v}_1(\mathbf{x}_t) - \mathbf{v}_\emptyset(\mathbf{x}_t) 
+    &= \big(\gamma_1(\mathbf{x}_t) + \gamma_2(\mathbf{x}_t)\big)\mathbf{v}_1(\mathbf{x}_t) - \big(\gamma_1(\mathbf{x}_t)\mathbf{v}_1(\mathbf{x}_t) + \gamma_2(\mathbf{x}_t)\mathbf{v}_2(\mathbf{x}_t)\big) \nonumber \tag{25}\\&= \gamma_2(\mathbf{x}_t)\big(\mathbf{v}_1(\mathbf{x}_t) - \mathbf{v}_2(\mathbf{x}_t)\big) 
+     = 2\left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\,\text{sigmoid}\!\left(-\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right)\boldsymbol{\mu}, \tag{26}\\[4pt] \mathbf{v}_2(\mathbf{x}_t) - \mathbf{v}_\emptyset(\mathbf{x}_t) 
+    &= \big(\gamma_1(\mathbf{x}_t) + \gamma_2(\mathbf{x}_t)\big)\mathbf{v}_2(\mathbf{x}_t) - \big(\gamma_1(\mathbf{x}_t)\mathbf{v}_1(\mathbf{x}_t) + \gamma_2(\mathbf{x}_t)\mathbf{v}_2(\mathbf{x}_t)\big) \nonumber \tag{27}\\&= -\gamma_1(\mathbf{x}_t)\big(\mathbf{v}_1(\mathbf{x}_t) - \mathbf{v}_2(\mathbf{x}_t)\big) 
+     = -2\left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\,\text{sigmoid}\!\left(\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right)\boldsymbol{\mu}. \tag{28}
+\end{align}
+</div>
+            <p>Substituting Eqs. <a href="#eq:v1_v2_simplified">22</a> and  <a href="#eq:cfg_discrepancy_m1">25</a>-- <a href="#eq:cfg_discrepancy_m2">27</a> into Eqs. <a href="#eq:cfg_field">5</a> and  <a href="#eq:strain_indicator">7</a> yields the exact CFG-guided velocity fields and guidance strains for modes $m = 1$ and $m = 2$</p>
+            <div class="equation-container" id="eq:two_gmm_cfg_velocity_m1" style="margin: 15px 0;"><span id="eq:two_gmm_cfg_strain_m1"></span><span id="eq:two_gmm_cfg_velocity_m2"></span><span id="eq:two_gmm_cfg_strain_m2"></span>
+\begin{align}
+\mathbf{v}_{w,1}(\mathbf{x}_t) 
+    &= \boldsymbol{\mu} + \frac{\dot{\sigma}_t}{\sigma_t}(\mathbf{x}_t - t\boldsymbol{\mu}) + 2(w-1) \left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\,\text{sigmoid}\!\left(-\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right)\boldsymbol{\mu}, \tag{29}\\\mathcal{I}_{w,1}(\mathbf{x}_t) 
+    &= \big\|\mathbf{v}_1(\mathbf{x}_t) - \mathbf{v}_\emptyset(\mathbf{x}_t)\big\|_2 
+     = 2\left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\,\text{sigmoid}\!\left(-\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right) \|\boldsymbol{\mu}\|_2, \tag{30}\\[6pt] \mathbf{v}_{w,2}(\mathbf{x}_t) 
+    &= -\boldsymbol{\mu} + \frac{\dot{\sigma}_t}{\sigma_t}(\mathbf{x}_t + t\boldsymbol{\mu}) - 2(w-1) \left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\,\text{sigmoid}\!\left(\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right)\boldsymbol{\mu}, \tag{31}\\\mathcal{I}_{w,2}(\mathbf{x}_t) 
+    &= \big\|\mathbf{v}_2(\mathbf{x}_t) - \mathbf{v}_\emptyset(\mathbf{x}_t)\big\|_2 
+     = 2\left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)\,\text{sigmoid}\!\left(\frac{2t\,\boldsymbol{\mu}^\top \mathbf{x}_t}{\sigma_t^2}\right)\|\boldsymbol{\mu}\|_2. \tag{32}
+\end{align}
+</div>
+            <p>Equations <a href="#eq:two_gmm_cfg_velocity_m1">29</a>-- <a href="#eq:two_gmm_cfg_strain_m2">32</a> provide an analytical explanation of how CFG steers trajectories across modes
+<div class="figure-container" id="fig:bimodal_gaussian_flow_mu_neg0102" style="margin: 25px 0; text-align: center;">
+  <img src="./static/images/bimodal_gaussian_flow_mu_neg0102.svg" alt="bimodal_gaussian_flow_mu_neg0102.svg" style="max-width: 100%; height: auto; display: block; margin: 0 auto;">
+  <p class="has-text-centered" style="margin-top: 10px;"><b>Figure 3:</b> <i>Bimodal Gaussian flow dynamics with target mode $\mu_m = -0.102$ (top row) and $\mu_m = 0.102$ (bottom row) with $\sigma \in \{0.25, 0.452, 0.5, 0.75, 1\}$.</i></p>
+</div></p>
+            <div class="figure-container" id="fig:bimodal_gaussian_flow_mu_pos0449" style="margin: 25px 0; text-align: center;">
+  <img src="./static/images/bimodal_gaussian_flow_mu_pos0449.svg" alt="bimodal_gaussian_flow_mu_pos0449.svg" style="max-width: 100%; height: auto; display: block; margin: 0 auto;">
+  <p class="has-text-centered" style="margin-top: 10px;"><b>Figure 4:</b> <i>Bimodal Gaussian flow dynamics with target mode $\mu_m = 0.449$ (top row) and $\mu_m = -0.449$ (bottom row) with $\sigma \in \{0.226, 0.25, 0.5, 0.75, 1\}$.</i></p>
+</div>
+            <ul style="margin: 10px 0 15px 25px;">
+  <li><strong>Hemisphere-Dependent Repulsion.</strong> For a prior sample initialized at $\boldsymbol{\mu}^\top \mathbf{x}_0 > 0$, conditioning on $m = 1$ (target $+\boldsymbol{\mu}$, same hemisphere) causes the competing probability $\gamma_2(\mathbf{x}_t) = \text{sigmoid}(-2t\,\boldsymbol{\mu}^\top \mathbf{x}_t/\sigma_t^2)$ to decay monotonically from $\frac{1}{2}$ toward $0$. Conditioning on $m = 2$ (target $-\boldsymbol{\mu}$, opposite hemisphere) from the same $\mathbf{x}_0$ causes the competing probability $\gamma_1(\mathbf{x}_t) = \text{sigmoid}(2t\,\boldsymbol{\mu}^\top \mathbf{x}_t/\sigma_t^2)$ to surge toward $1$ while $\boldsymbol{\mu}^\top\mathbf{x}_t > 0$, injecting a strong repulsive boost $- 2(w-1)\left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right) \gamma_1(\mathbf{x}_t)\boldsymbol{\mu}$ that drives the trajectory across $\boldsymbol{\mu}^\top \mathbf{x}_t = 0$.</li>
+  <li><strong>Sharp Inflection at the Mode Crossing.</strong> As the $m = 2$ trajectory crosses the symmetry hyperplane $\boldsymbol{\mu}^\top \mathbf{x}_t = 0$, the logistic gate $\gamma_1(\mathbf{x}_t)$ collapses from $\approx 1$ to $\approx 0$ over a narrow transition window. This sudden shut-off of the CFG repulsion term produces a pronounced interior peak in $\mathcal{I}_{w,2}(\mathbf{x}_t)$ and a sharp inflection in $\mathbf{v}_{w,2}(\mathbf{x}_t)$.</li>
+</ul>
+            <h3 class="title is-4" id="subsec_3.3" style="margin-top: 20px;">Multimodal Gaussian Mixture Models</h3>
+            <p>Let the data distribution be an $M$-component isotropic Gaussian Mixture Model (GMM), $
+    p_{\text{data}}(\mathbf{x}) = \sum_{m=1}^{M} \pi_m \mathcal{N}\big(\mathbf{x}; \boldsymbol{\mu}_m, \sigma_m^2 \mathbf{I}_d\big), \sum_{m=1}^{M} \pi_m = 1$,
+where $m = \{1, \dots, M\}$. 
+The marginal distribution at time $t \in [0, 1]$ is given by $ p_t(\mathbf{x}) = \sum_{m=1}^{M} \pi_m \mathcal{N}\big(\mathbf{x}; t\boldsymbol{\mu}_m, \sigma_{t,m}^2 \mathbf{I}_d\big), \sigma_{t,m}^2 = (1-t)^2 + t^2\sigma_m^2$.
+Conditioned on class $m$, the conditional trajectory is $\mathbf{x}_{m,t} = t\boldsymbol{\mu}_m + \sigma_{t,m}\mathbf{x}_0$, and the conditional velocity is $
+    \mathbf{v}_m(\mathbf{x}_t) = \boldsymbol{\mu}_m + \frac{\dot{\sigma}_{t,m}}{\sigma_{t,m}}\left(\mathbf{x}_t - t\boldsymbol{\mu}_m\right)$.
+The exact unconditional velocity $\mathbf{v}_\emptyset(\mathbf{x}_t) = \mathbb{E}[\mathbf{x}_{1} - \mathbf{x}_{0} \mid \mathbf{x}_{t}]$ is the softmax posterior-weighted average over all $M$ modes</p>
+            <div class="equation-container" id="eq:gmm_unconditional_v" style="margin: 15px 0;">
+\begin{equation}
+\mathbf{v}_\emptyset(\mathbf{x}_t) = \sum_{j=1}^{M} \gamma_j(\mathbf{x}_t) \, \mathbf{v}_j(\mathbf{x}_t), \gamma_j(\mathbf{x}_t) = \frac{\pi_j \mathcal{N}\big(\mathbf{x}_t; t\boldsymbol{\mu}_j, \sigma_{t,j}^2 \mathbf{I}_d\big)}{\sum_{l=1}^{M} \pi_l \mathcal{N}\big(\mathbf{x}_t; t\boldsymbol{\mu}_l, \sigma_{t,l}^2 \mathbf{I}_d\big)}. \tag{33}
+\end{equation}
+</div>
+            <p>Using $\sum_{j=1}^M \gamma_j(\mathbf{x}_t) = 1$, the discrepancy between the conditional velocity $\mathbf{v}_m(\mathbf{x}_t)$ and the unconditional velocity $\mathbf{v}_\emptyset(\mathbf{x}_t)$ is</p>
+            <div class="equation-container" id="eq:gmm_discrepancy_expansion" style="margin: 15px 0;">
+\begin{equation}
+\mathbf{v}_m(\mathbf{x}_t) - \mathbf{v}_\emptyset(\mathbf{x}_t) 
+    = \left(\sum_{j=1}^M \gamma_j(\mathbf{x}_t)\right)\mathbf{v}_m(\mathbf{x}_t) - \sum_{j=1}^M \gamma_j(\mathbf{x}_t)\mathbf{v}_j(\mathbf{x}_t) 
+    = \sum_{j \neq m} \gamma_j(\mathbf{x}_t)\big(\mathbf{v}_m(\mathbf{x}_t) - \mathbf{v}_j(\mathbf{x}_t)\big). \tag{34}
+\end{equation}
+</div>
+            <p>Substituting Eq. <a href="#eq:gmm_discrepancy_expansion">34</a> into Eqs. <a href="#eq:cfg_field">5</a> and  <a href="#eq:strain_indicator">7</a> for target class $m$ yields the exact guided velocity field $\mathbf{v}_{w,m}(\mathbf{x}_t)$ and guidance strain $\mathcal{I}_{w,m}(\mathbf{x}_t)$</p>
+            <div class="equation-container" id="eq:gmm_cfg_v" style="margin: 15px 0;"><span id="eq:gmm_strain_exact"></span>
+\begin{align}
+\mathbf{v}_{w,m}(\mathbf{x}_t) &= \mathbf{v}_m(\mathbf{x}_t) + (w - 1) \sum_{j \neq m} \gamma_j(\mathbf{x}_t) \big(\mathbf{v}_m(\mathbf{x}_t) - \mathbf{v}_j(\mathbf{x}_t)\big), \tag{35}\\\mathcal{I}_{w,m}(\mathbf{x}_t) &= \left\| \sum_{j \neq m} \gamma_j(\mathbf{x}_t) \big(\mathbf{v}_m(\mathbf{x}_t) - \mathbf{v}_j(\mathbf{x}_t)\big) \right\|_2. \tag{36}
+\end{align}
+</div>
+            <p>In the homoscedastic case where all components share equal variance $\sigma_m = \sigma$ ($\sigma_{t,m}^2 = \sigma_t^2 = (1-t)^2 + t^2\sigma^2$), the spatial state $\mathbf{x}_t$ cancels from each pairwise velocity difference $\mathbf{v}_m(\mathbf{x}_t) - \mathbf{v}_j(\mathbf{x}_t) = \left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right)(\boldsymbol{\mu}_m - \boldsymbol{\mu}_j)$, simplifying Eqs. <a href="#eq:gmm_cfg_v">35</a>-- <a href="#eq:gmm_strain_exact">36</a> to</p>
+            <div class="equation-container" id="eq:gmm_cfg_v_equal_sigma" style="margin: 15px 0;"><span id="eq:gmm_strain_equal_sigma"></span>
+\begin{align}
+\mathbf{v}_{w,m}(\mathbf{x}_t) &= \boldsymbol{\mu}_m + \frac{\dot{\sigma}_{t}}{\sigma_{t}}\left(\mathbf{x}_t - t\boldsymbol{\mu}_m\right) + (w - 1) \left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right) \sum_{j \neq m} \gamma_j(\mathbf{x}_t)(\boldsymbol{\mu}_m - \boldsymbol{\mu}_j), \tag{37}\\\mathcal{I}_{w,m}(\mathbf{x}_t) &= \left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right) \left\| \sum_{j \neq m} \gamma_j(\mathbf{x}_t)(\boldsymbol{\mu}_m - \boldsymbol{\mu}_j) \right\|_2 = \left(1 - t\frac{\dot{\sigma}_t}{\sigma_t}\right) \left\| \boldsymbol{\mu}_m - \sum_{j=1}^M \gamma_j(\mathbf{x}_t)\boldsymbol{\mu}_j \right\|_2. \tag{38}
+\end{align}
+</div>
+            <div class="figure-container" id="fig:gaussian_hierarchy_trajectories_vector_fields" style="margin: 25px 0; text-align: center;">
+  <img src="./static/images/gaussian_hierarchy_trajectories_vector_fields.svg" alt="gaussian_hierarchy_trajectories_vector_fields.svg" style="max-width: 100%; height: auto; display: block; margin: 0 auto;">
+  <p class="has-text-centered" style="margin-top: 10px;"><b>Figure 5:</b> <i><strong>Visualization of unconditional vector fields, CFG vector fields, and guided ODE sampling trajectories.</strong> 
+    <strong>Top row:</strong> Unconditional vector fields $\mathbf{v}_\emptyset(\mathbf{x}_t)$ at $t = 0.32$ showing prior distributions $\mathcal{N}(0, I)$, ODE trajectories, and target modes $\boldsymbol{\mu}_m$. 
+    <strong>Bottom row:</strong> CFG flow $\mathbf{v}_{w,1}(\mathbf{x}_t)$ with 10-step Heun solvers comparing reference RK4 ODE trajectories against various sampling schedules ($t_{\mathrm{inv}}$, $t_{\mathrm{shift}}$) and hyperparameters ($\sigma_{\mathrm{inv}}$, $\sigma_{\mathrm{shift}}$).</i></p>
+</div>
+We evaluate $N = 10$ step Heun integration under CFG ($w = 3.7$, $s = 4.9$) on a symmetric 2D 8-mode GMM with component means $\boldsymbol{\mu}_m = R(\cos \frac{2\pi m}{8}, \sin \frac{2\pi m}{8})^\top$ ($R = 5.0$, $\sigma_m = 0.452$, $\pi_m = \frac{1}{8}$).
+Table <a href="#tab:gmm_results">2</a> reports the terminal $L_2$ trajectory error $\|\hat{\mathbf{x}}_N - \mathbf{x}^*\|_2$ and Mean Absolute Error ($\mathrm{MAE} = \|\hat{\mathbf{x}}_N - \mathbf{x}^*\|_1$) relative to a $1000$-step RK4 reference trajectory $\mathbf{x}^*$.
+<div class="table-container" id="tab:gmm_results" style="margin: 20px 0;">
+  <p class="has-text-centered"><b>Table 2:</b> <i>Quantitative comparison of sampling schedules on the 2D 8-mode GMM benchmark ($N = 10$ Heun steps, $w = 3.7$, $s = 4.9$). Best results are highlighted in <strong>bold</strong>.</i></p>
+  <table class="table is-bordered is-striped is-narrow is-hoverable" style="margin: auto;">
+                <tr><th><strong>Schedule</strong></th><th><strong>Trajectory Error $\|\hat{\mathbf{x}}_N - \mathbf{x}^*\|_2$</strong> ($\downarrow$)</th><th><strong>MAE $ \|\hat{\mathbf{x}}_N - \mathbf{x}^*\|_1$</strong> ($\downarrow$)</th></tr>
+                <tr><td>Uniform ($t = u$)</td><td>$0.0284 \pm 0.0078$</td><td>$0.0176 \pm 0.0054$</td></tr>
+                <tr><td>$t_{\mathrm{shift}}$ ($\sigma_{\mathrm{shift}} = 3$)</td><td>$0.0954 \pm 0.0209$</td><td>$0.0519 \pm 0.0134$</td></tr>
+                <tr><td>$t_{\mathrm{shift}}$ ($\sigma_{\mathrm{shift}} = 2$)</td><td>$0.0531 \pm 0.0073$</td><td>$0.0295 \pm 0.0048$</td></tr>
+                <tr><td>$t_{\mathrm{shift}}$ ($\sigma_{\mathrm{shift}} = 1$)</td><td>$0.0378 \pm 0.0121$</td><td>$0.0202 \pm 0.0071$</td></tr>
+                <tr><td>$t_{\mathrm{inv}}$ ($\sigma_{\mathrm{inv}} = 3$)</td><td>$0.0459 \pm 0.0065$</td><td>$0.0257 \pm 0.0042$</td></tr>
+                <tr><td>$t_{\mathrm{inv}}$ ($\sigma_{\mathrm{inv}} = 2$)</td><td>$\mathbf{0.0082 \pm 0.0033}$</td><td>$\mathbf{0.0048 \pm 0.0017}$</td></tr>
+                <tr><td>$t_{\mathrm{inv}}$ ($\sigma_{\mathrm{inv}} = 1$)</td><td>$0.0666 \pm 0.0278$</td><td>$0.0415 \pm 0.0175$</td></tr>
+  </table>
+</div>
+As demonstrated in Figure <a href="#fig:density_and_schedule">1</a> and Table <a href="#tab:gmm_results">2</a>, $\sigma_{\mathrm{inv}} = 1$ takes large terminal strides near $t \to 1$, amplifying predictor-corrector truncation error during terminal mode contraction.
+$\sigma_{\mathrm{inv}} = 3$ forces S-curve saturation near the endpoints $t \in \{0, 1\}$.
+$\sigma_{\mathrm{inv}} = 2$ with the inverse-density scaling schedule $t_{\mathrm{inv}}$ achieves the lowest $L_2$ trajectory error and lowest MAE.
+            <h2 class="title is-3" id="sec_4" style="margin-top: 30px;">Empirical Study on Representation Flow Matching (RiT)</h2>
+            <p>To verify whether the dynamical trade-offs identified in our analytical Gaussian and GMM studies generalize to large-scale high-dimensional generation, we evaluate inference time-scheduling across dispersion scales $\sigma_\text{inv} \in \{1, 2, 3\}$ on <strong>RiT</strong> (Representation Diffusion Transformer) <cite data-ref="zhang2026rit"></cite>.
+RiT trains a vanilla Diffusion Transformer in standardized DINOv2 representation space using clean data prediction, a dimension-aware time shift ($s = 4.9$), and a joint <code>[CLS]</code>-patch alignment objective.
+<div class="table-container" id="tab:rit_results" style="margin: 20px 0;">
+  <p class="has-text-centered"><b>Table 3:</b> <i>Quantitative comparison of sampling schedules on RiT <cite data-ref="zhang2026rit"></cite> across different $\sigma_{\text{inv}}$ scalings ($w = 3.7$, $s = 4.9$). Best results are highlighted in <strong>bold</strong>.</i></p>
+  <table class="table is-bordered is-striped is-narrow is-hoverable" style="margin: auto;">
+                <tr><th><strong>Inference Schedule</strong></th><th><strong>FID</strong> ($\downarrow$)</th><th><strong>IS</strong> ($\uparrow$)</th></tr>
+                <tr><td>$w = 3.7, \sigma_{\text{shift}} = 1$, Baseline <cite data-ref="zhang2026rit"></cite></td><td>1.3023</td><td>296.4935</td></tr>
+                <tr><td>$w = 3.7, \sigma_{\text{inv}} = 3$</td><td>1.3910</td><td>290.8568</td></tr>
+                <tr><td>$w = 3.7, \sigma_{\text{inv}} = 2$</td><td><strong>1.2425</strong></td><td>308.0255</td></tr>
+                <tr><td>$w = 3.7, \sigma_{\text{inv}} = 1$</td><td>2.2331</td><td><strong>308.4232</strong></td></tr>
+  </table>
+</div>
+Table <a href="#tab:rit_results">3</a> reports the Fr\'echet Inception Distance (FID) and Inception Score (IS) across $\sigma_\text{inv} \in \{1, 2, 3\}$ against the baseline schedule. The empirical trends mirror our analytical predictions: ($\sigma_\text{inv} = 2$) Moderately broadening the quantile schedule resolves both the intermediate semantic transition and terminal representation convergence, reducing FID by $4.6\%$ over the baseline ($1.2425$ vs. $1.3023$) while simultaneously improving IS by $+11.53$ ($308.0255$ vs. $296.4935$).</p>
+            <h2 class="title is-3" id="sec_5" style="margin-top: 30px;">Conclusion</h2>
+We have established a unified theoretical and empirical framework connecting continuous training time distributions $p(t)$ to discrete inference schedules $t_k = f(u_k)$ in flow matching.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BIBLIOGRAPHY BLOCK -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column is-full-width">
+        <h2 class="title is-3">References</h2>
+        <div id="bibliography" class="content">
+            <!-- Dynamically populated by bibliography.js -->
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="BibTeX">
+  <div class="container is-max-desktop content">
+    <h2 class="title">BibTeX</h2>
+    <pre>
+      <code>@misc{xie2026AUC,
+          title={Analyzing Inference Schedules of Flow Matching}, 
+          author={Jingren Xie},
+          year={2026},
+          url={https://zekifayes.github.io/fmts}
+      }</code>
+    </pre>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="columns is-centered">
+      <div class="column is-8">
+        <div class="content">
+          <p>
+            This website is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
