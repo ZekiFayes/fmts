@@ -392,10 +392,10 @@ As demonstrated in Figure <a href="#fig:density_and_schedule">1</a> and Table 
 $\sigma_{\mathrm{inv}} = 3$ forces S-curve saturation near the endpoints $t \in \{0, 1\}$.
 $\sigma_{\mathrm{inv}} = 2$ with the inverse-density scaling schedule $t_{\mathrm{inv}}$ achieves the lowest $L_2$ trajectory error and lowest MAE.
             <h2 class="title is-3" id="sec_4" style="margin-top: 30px;">Empirical Study on Representation Flow Matching (RiT)</h2>
-            <p>To verify whether the dynamical trade-offs identified in our analytical Gaussian and GMM studies generalize to large-scale high-dimensional generation, we evaluate inference time-scheduling across dispersion scales $\sigma_\text{inv} \in \{1, 2, 3\}$ on <strong>RiT</strong> (Representation Diffusion Transformer) <cite data-ref="zhang2026rit"></cite>.
+            <p>To verify whether the dynamical trade-offs identified in our analytical Gaussian and GMM studies generalize to large-scale high-dimensional generation, we evaluate inference schedules across $\sigma_\text{inv} \in \{1, 2, 3\}$ on <strong>RiT</strong> (Representation Diffusion Transformer) <cite data-ref="zhang2026rit"></cite>.
 RiT trains a vanilla Diffusion Transformer in standardized DINOv2 representation space using clean data prediction, a dimension-aware time shift ($s = 4.9$), and a joint <code>[CLS]</code>-patch alignment objective.
 <div class="table-container" id="tab:rit_results" style="margin: 20px 0;">
-  <p class="has-text-centered"><b>Table 3:</b> <i>Quantitative comparison of sampling schedules on RiT <cite data-ref="zhang2026rit"></cite> across different $\sigma_{\text{inv}}$ scalings ($w = 3.7$, $s = 4.9$). Best results are highlighted in <strong>bold</strong>.</i></p>
+  <p class="has-text-centered"><b>Table 3:</b> <i>Quantitative comparison of sampling schedules on RiT <cite data-ref="zhang2026rit"></cite> across different $\sigma_{\text{inv}}$ ($w = 3.7$, $s = 4.9$). Best results are highlighted in <strong>bold</strong>.</i></p>
   <table class="table is-bordered is-striped is-narrow is-hoverable" style="margin: auto;">
                 <tr><th><strong>Inference Schedule</strong></th><th><strong>FID</strong> ($\downarrow$)</th><th><strong>IS</strong> ($\uparrow$)</th></tr>
                 <tr><td>$w = 3.7, \sigma_{\text{shift}} = 1$, Baseline <cite data-ref="zhang2026rit"></cite></td><td>1.3023</td><td>296.4935</td></tr>
@@ -404,7 +404,7 @@ RiT trains a vanilla Diffusion Transformer in standardized DINOv2 representation
                 <tr><td>$w = 3.7, \sigma_{\text{inv}} = 1$</td><td>2.2331</td><td><strong>308.4232</strong></td></tr>
   </table>
 </div>
-Table <a href="#tab:rit_results">3</a> reports the Fr\'echet Inception Distance (FID) and Inception Score (IS) across $\sigma_\text{inv} \in \{1, 2, 3\}$ against the baseline schedule. The empirical trends mirror our analytical predictions: ($\sigma_\text{inv} = 2$) Moderately broadening the quantile schedule resolves both the intermediate semantic transition and terminal representation convergence, reducing FID by $4.6\%$ over the baseline ($1.2425$ vs. $1.3023$) while simultaneously improving IS by $+11.53$ ($308.0255$ vs. $296.4935$).</p>
+Table <a href="#tab:rit_results">3</a> reports the Frechet Inception Distance (FID) and Inception Score (IS) across $\sigma_\text{inv} \in \{1, 2, 3\}$ against the baseline schedule. The empirical trends mirror our analytical predictions: ($\sigma_\text{inv} = 2$) Moderately broadening the quantile schedule resolves both the intermediate semantic transition and terminal representation convergence, reducing FID by $4.6\%$ over the baseline ($1.2425$ vs. $1.3023$) while simultaneously improving IS by $+11.53$ ($308.0255$ vs. $296.4935$).</p>
             <h2 class="title is-3" id="sec_5" style="margin-top: 30px;">Conclusion</h2>
 We have established a unified theoretical and empirical framework connecting continuous training time distributions $p(t)$ to discrete inference schedules $t_k = f(u_k)$ in flow matching.
         </div>
